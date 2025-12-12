@@ -1,52 +1,62 @@
 import fitz #para abrir pdfs -> pymupdf
 import easyocr #ia para leer img
-import os
+import numpy as np
+import io
+from PIL import Image, ImageOps, ImageEnhance
 
 #inicializar ocr solo una vez al principio. Si se hace dentro de la función, el servidor se congelaría cada vez que subo un doc
 print("cargarndo ocr...")
 reader = easyocr.Reader(['es'], gpu=False) #buscan en español
 
-#leer pdf
-def pdf_to_text(file_path):
-    """
-    Recibe la ruta de un archivo pdf
-    Devuelve un string gigante con todo el txt que ha encontrado
-    """
-
-    full_text = ""
+def extract_text(file_content: bytes, filename: str) -> str:
+    text_result = ""
+    filename = filename.lower()
 
     try:
-        #1.Abrir pdf con fitz
-        doc = fitz.open(file_path)
-
-        #2. paginador
-        for num_pag, page in enumerate(doc):
-            #Intentar leer texto digital
-            text = page.get_text()
-
-            if text.strip():
-                #si encuentra texto real, lo usamos
-                print(f"Página {num_pag + 1}: Texto og.")
-                full_text += text + "\n"
+        # --- OPCIÓN A: PDF ---
+        if filename.endswith(".pdf"):
+            print("📄 Procesando PDF...")
+            doc = fitz.open(stream=file_content, filetype="pdf")
+            for page in doc:
+                text_result += page.get_text()
+                    
+       # --- OPCIÓN B: IMAGEN (JPG/PNG) ---
+        else:
+            print("📸 Procesando Imagen (Modo Alta Calidad)...")
             
-            else:
-                #si es img usar ia
-                print(f"Página {num_pag + 1}: No hay texto digital. Usando OCR ...")
+            try:
+                image = Image.open(io.BytesIO(file_content))
+            except Exception as e:
+                print(f"❌ Error Pillow: {e}")
+                return ""
 
-                # Convertimos la página del PDF en una imagen (png)
-                pix = page.get_pixmap()
-                img_bytes = pix.tobytes("png")
-                
-                # Le pasamos la imagen a la IA
-                # detail=0 hace que solo nos devuelva el texto, sin coordenadas ni confianza
-                result = reader.readtext(img_bytes, detail=0) 
-                
-                # Unimos las palabras que encontró la IA
-                page_text = " ".join(result)
-                full_text += page_text + "\n"
-        doc.close()
-        return full_text
+            # 1. ESCALA DE GRISES (Quitamos colores que confunden)
+            image = ImageOps.grayscale(image)
+            
+            # 2. AUMENTAR CONTRASTE (Hacer el negro más negro y el blanco más blanco)
+            enhancer = ImageEnhance.Contrast(image)
+            image = enhancer.enhance(2.0) # Doble de contraste
+
+            # 3. GESTIÓN DE TAMAÑO (El equilibrio)
+            # Una nómina A4 necesita píxeles. 1024 era muy poco.
+            # Subimos a 2500. Si la imagen es menor, NO la tocamos.
+            if image.width > 2500 or image.height > 2500:
+                print("   ⚠️ Imagen gigante: Redimensionando a 2500px para no explotar la RAM")
+                image.thumbnail((2500, 2500))
+            else:
+                print(f"   ✅ Manteniendo resolución original: {image.size}")
+            
+            # 4. Leer con EasyOCR
+            img_np = np.array(image)
+            
+            # paragraph=False ayuda a leer líneas sueltas (números) mejor
+            results = reader.readtext(img_np, detail=0, paragraph=False)
+            
+            for line in results:
+                text_result += line + " "
+
+        return text_result
 
     except Exception as e:
-        print(f"Error procesando el PDF: {e}")
-        return None
+        print(f"❌ ERROR CRÍTICO EN OCR: {e}")
+        return ""

@@ -1,71 +1,105 @@
 import openai
 import os
 import json
-from dotenv import load_dotenv #leer env
+import base64 # <--- Necesario para convertir la imagen en texto transportable
+from dotenv import load_dotenv 
 
-# 1. Cargar la configuración
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 
-# Si no hay clave, avisamos (pero no rompemos el programa todavía)
 if not api_key:
-    print("ADVERTENCIA: No se encontró OPENAI_API_KEY en .env")
+    print("⚠️ ADVERTENCIA: No se encontró OPENAI_API_KEY en .env")
 
-# Configuramos el cliente
 client = openai.OpenAI(api_key=api_key)
 
+# --- FUNCIÓN 1: Para Texto (PDFs) ---
 def analyze_payroll(text_anonymized):
-    """
-    Recibe: Texto de la nómina (censurado).
-    Envía: A GPT-4o-mini para análisis real.
-    Devuelve: JSON estructurado.
-    """
-    print("Conectando OpenAI...")
+    print("--- 🧠 Conectando con OpenAI (Modo Texto)... ---")
     
-    # EL PROMPT: Las instrucciones para el experto
     system_prompt = """
-    Eres un experto abogado laboralista y asesor financiero en España.
-    Analiza el texto de esta nómina (OCR).
-    
-    Tu misión es extraer datos y dar consejos útiles.
-    Devuelve SOLO un JSON válido con esta estructura exacta:
+    Eres un experto abogado laboralista y asesor financiero.
+    Analiza el texto de esta nómina.
+    ⚠️ PRIVACIDAD: No incluyas nombres propios ni DNI en la respuesta.
+    Devuelve SOLO un JSON:
     {
-        "resumen": "Breve explicación general de la nómina en 2 frases.",
+        "resumen": "Resumen breve...",
         "salario_bruto": 0.00,
         "salario_neto": 0.00,
-        "consejos": [
-            "Consejo 1 sobre impuestos o convenio",
-            "Consejo 2 sobre mejoras posibles",
-            "Consejo 3 (opcional)"
-        ]
+        "consejos": ["Consejo 1", "Consejo 2"]
     }
-    Si no encuentras algún dato, pon 0.00 o "No encontrado".
     """
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini", # El modelo que usamos
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Analiza esto:\n\n{text_anonymized}"}
             ],
-            response_format={"type": "json_object"}, # Obligamos a que sea JSON
-            temperature=0.2 # Creatividad baja (para que sea preciso con los números)
+            response_format={"type": "json_object"},
+            temperature=0.2
         )
-        
-        # Leemos la respuesta de la IA
-        content = response.choices[0].message.content
-        print("Recibido correctamente.")
-        
-        # Convertimos el texto a Diccionario Python
-        return json.loads(content)
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"❌ Error OpenAI: {e}")
+        return _error_response()
+
+# --- FUNCIÓN 2: Para Imágenes (Vision) 👁️ ---
+def analyze_payroll_image(image_bytes):
+    print("--- 👁️ Conectando con OpenAI (Modo Visión)... ---")
+    
+    # 1. Convertimos la imagen a Base64 (el formato que pide OpenAI)
+    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+
+    system_prompt = """
+    Eres un experto abogado laboralista. Estás viendo una imagen de una nómina.
+    Extrae los datos financieros clave y dame consejos.
+    
+    ⚠️ PRIVACIDAD CRÍTICA: 
+    - Aunque veas nombres o DNI en la imagen, NO los transcribas en el JSON.
+    - Trata los datos como anónimos.
+    
+    Devuelve SOLO un JSON válido con esta estructura:
+    {
+        "resumen": "Resumen breve...",
+        "salario_bruto": 0.00,
+        "salario_neto": 0.00,
+        "consejos": ["Consejo 1", "Consejo 2"]
+    }
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini", # El modelo mini también tiene visión y es barato
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Analiza esta imagen de nómina:"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+        return json.loads(response.choices[0].message.content)
 
     except Exception as e:
-        print(f"Error en OpenAI: {e}")
-        # En caso de error, devolvemos algo para que la app no explote
-        return {
-            "resumen": "Hubo un error al analizar la nómina con la IA.",
-            "salario_bruto": 0,
-            "salario_neto": 0,
-            "consejos": ["Inténtalo de nuevo más tarde."]
-        }
+        print(f"❌ Error OpenAI Vision: {e}")
+        return _error_response()
+
+# Helper para devolver error limpio
+def _error_response():
+    return {
+        "resumen": "Error al analizar.",
+        "salario_bruto": 0,
+        "salario_neto": 0,
+        "consejos": ["Inténtalo de nuevo."]
+    }
